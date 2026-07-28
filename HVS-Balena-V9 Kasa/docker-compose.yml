@@ -1,0 +1,65 @@
+version: '2.4'  # ¡IMPORTANTE! Versión mínima requerida
+
+services:
+  app:
+    build: .
+    privileged: true
+    restart: always
+    depends_on:
+      - db
+    # Variables inyectadas desde el dashboard de balena (Device/Fleet variables, scope *).
+    labels:
+      io.balena.features.supervisor-api: '1'
+      io.balena.features.camera: '1'
+    tmpfs:
+      - /secrets:size=10m,mode=700
+    devices:
+      - "/dev/video0:/dev/video0"
+      - "/dev/video2:/dev/video2"
+      - "/dev/video4:/dev/video4"
+      - "/dev/gpiomem:/dev/gpiomem"
+    volumes:
+      - datos_de_app:/data  # Solo volumen persistente necesario
+
+
+  db:
+    build: ./db
+    restart: always
+    # Las lineas MYSQL_*=${DB_*} solo se interpolan en dev (docker compose). En
+    # balena quedan literales y el entrypoint de la imagen `db` las reescribe
+    # desde DB_* (ver db/entrypoint-mapenv.sh).
+    environment:
+      - MYSQL_ROOT_PASSWORD=SAFIA_ROOT
+      - MYSQL_DATABASE=hollymatic
+      - MYSQL_USER=hollymatic
+      - MYSQL_PASSWORD=SAFIA
+
+
+  # Agendador (APScheduler): apagado del KP200, recordatorio de limpieza y
+  # reporte mensual de KPIs (lee la DB por la red interna, DB_HOST=db).
+  # Variables inyectadas desde el dashboard de balena (Device/Fleet variables, scope *).
+  scheduler:
+    build: ./scheduler
+    restart: always
+    depends_on:
+      - db
+    tmpfs:
+      - /secrets:size=10m,mode=700
+
+  # API de calibración remota (FastAPI). Imagen ligera multiarch (corre en arm64/RPi4).
+  # Controla el enchufe Kasa por la LAN; no usa db, cámara ni GPIO.
+  # Variables inyectadas desde el dashboard de balena (Device/Fleet variables, scope *):
+  #   MIKASA_IP/USERNAME/PASSWORD, JWT_SECRET_KEY, API_USERNAME, API_PASSWORD,
+  #   API_PASSWORD_HASH, ACCESS_TOKEN_EXPIRE_MINUTES, REFRESH_TOKEN_EXPIRE_DAYS, CALIBRATION_SECONDS.
+  # JWT_ALGORITHM NO se declara aqui a proposito: no existe como variable de balena y,
+  # si se declarara suelta, balena la inyectaria vacia ("") y jose fallaria con
+  # "Algorithm  not supported.". Al omitirla, el codigo usa su valor por defecto (HS256).
+  api:
+    build: ./api
+    restart: always
+    ports:
+      - "80:8000"
+
+volumes:
+  datos_de_app: {}
+  db_data: {}
